@@ -96,7 +96,9 @@ private:
   void _aio_thread();
   void _discard_thread(DiscardThread* thr);
   bool _queue_discard(interval_set<uint64_t> &to_release);
-  bool try_discard(interval_set<uint64_t> &to_release, bool async = true) override;
+  bool try_discard(interval_set<uint64_t> &to_release,
+                   bool async = true,
+                   bool force = false) override;
 
   void collect_alerts(osd_alert_list_t& alerts, const std::string& device_name) override;
 
