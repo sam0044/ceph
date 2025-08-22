@@ -1,13 +1,13 @@
 tasks:
 - cephadm.shell:
     host.a:
-      - echo "PRE-DOWNGRADE STATE:"
+      - echo "PRE-UPGRADE STATE:"
       - ceph version
       - ceph orch ps
       - ceph -s
 
-      - echo "Starting downgrade from reef-18.2.7 back to CES-v25.03.2-rc.4..."
-      - ceph orch upgrade start --image "harbor.clyso.com/ces/ceph/ceph:ces-v25.03.2-rc.4"
+      - echo "Starting upgrade from CES-v25.03.2-rc.4 to reef-18.2.7..."
+      - ceph orch upgrade start --image "quay.io/ceph/ceph:v18.2.7"
       - sleep 30
 
       - |
@@ -131,19 +131,9 @@ tasks:
         EOF
         
         chmod +x /tmp/upgrade_monitor.sh
-        /tmp/upgrade_monitor.sh "25.03.2-rc.4" "downgrade" "reef-18.2.7" "CES-v25.03.2-rc.4" "2400"
+        /tmp/upgrade_monitor.sh "18.2.7" "upgrade" "CES-v25.03.2-rc.4" "reef-18.2.7" "2400"
 
-      - echo "POST-DOWNGRADE STATE:"
+      - echo "POST-UPGRADE STATE:"
       - ceph version
       - ceph orch ps
       - ceph -s
-
-overrides:
-  ceph:
-    log-ignorelist:
-      - CEPHADM_STRAY_DAEMON  
-      - CEPHADM_FAILED_DAEMON
-      - CEPHADM_AGENT_DOWN
-      - CEPHADM_DAEMON_PLACE_FAIL
-    log-only-match:
-      - CEPHADM_
