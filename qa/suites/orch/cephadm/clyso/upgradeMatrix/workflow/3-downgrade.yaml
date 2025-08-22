@@ -6,8 +6,8 @@ tasks:
       - ceph orch ps
       - ceph -s
 
-      - echo "Starting downgrade from reef-18.2.7 back to CES-v25.03.2-rc.4..."
-      - ceph orch upgrade start --image "harbor.clyso.com/ces/ceph/ceph:ces-v25.03.2-rc.4"
+      - echo "Starting downgrade from {{ctx.config.target_image}} back to {{ctx.config.base_image}}..."
+      - ceph orch upgrade start --image "{{ctx.config.base_image}}"
       - sleep 30
 
       - |
@@ -138,12 +138,3 @@ tasks:
       - ceph orch ps
       - ceph -s
 
-overrides:
-  ceph:
-    log-ignorelist:
-      - CEPHADM_STRAY_DAEMON  
-      - CEPHADM_FAILED_DAEMON
-      - CEPHADM_AGENT_DOWN
-      - CEPHADM_DAEMON_PLACE_FAIL
-    log-only-match:
-      - CEPHADM_

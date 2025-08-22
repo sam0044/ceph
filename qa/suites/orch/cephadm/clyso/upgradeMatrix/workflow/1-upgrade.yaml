@@ -6,8 +6,8 @@ tasks:
       - ceph orch ps
       - ceph -s
 
-      - echo "Starting upgrade from CES-v25.03.2-rc.4 to reef-18.2.7..."
-      - ceph orch upgrade start --image "quay.io/ceph/ceph:v18.2.7"
+      - echo "Starting upgrade from {{ctx.config.base_image}} to {{ctx.config.target_image}}..."
+      - ceph orch upgrade start --image "{{ctx.config.target_image}}"
       - sleep 30
 
       - |
@@ -137,13 +137,3 @@ tasks:
       - ceph version
       - ceph orch ps
       - ceph -s
-
-overrides:
-  ceph:
-    log-ignorelist:
-      - CEPHADM_STRAY_DAEMON  
-      - CEPHADM_FAILED_DAEMON
-      - CEPHADM_AGENT_DOWN
-      - CEPHADM_DAEMON_PLACE_FAIL
-    log-only-match:
-      - CEPHADM_

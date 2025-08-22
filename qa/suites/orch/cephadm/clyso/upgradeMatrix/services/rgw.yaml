@@ -8,10 +8,5 @@ tasks:
         spec:
           rgw_frontend_port: 8080
 
-# it will be named rgw.foo for some reason
 - cephadm.wait_for_service:
     service: rgw.foo
-
-- cephadm.shell:
-    host.a:
-      - ceph status

@@ -3,9 +3,11 @@ roles:
   - mon.a
   - mgr.a  
   - osd.0
+  - osd.2
 - - host.b
   - mgr.b
   - osd.1
+  - osd.3
   - client.0
 
 tasks:
@@ -33,8 +35,13 @@ openstack:
 overrides:
   ceph:
     conf:
+      global:
+        osd_pool_default_size: 2
+        osd_pool_default_min_size: 1
       osd:
         osd shutdown pgref assert: true
+      mds:
+        max_mds: 2
     log-only-match:
       - CEPHADM_
     log-ignorelist:
