@@ -4,11 +4,11 @@ roles:
   - mgr.a  
   - osd.0
   - osd.2
+  - client.0
 - - host.b
   - mgr.b
   - osd.1
   - osd.3
-  - client.0
 
 tasks:
 # Install system packages via pexec (avoids CEPH RPM installation)

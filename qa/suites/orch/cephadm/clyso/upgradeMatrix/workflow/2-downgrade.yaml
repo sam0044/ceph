@@ -6,8 +6,7 @@ tasks:
         client.0:
             - upgrade.sh
     env:
-        BASE_IMAGE: "{{ctx.config.base_image}}"
-        TARGET_IMAGE: "{{ctx.config.target_image}}"
-        BASE_IMAGE_NAME: "{{ctx.config.base_image_name}}"
-        TARGET_IMAGE_NAME: "{{ctx.config.target_image_name}}"
-    
+        BASE_IMAGE: "{{ctx.config.target_image}}"
+        TARGET_IMAGE: "{{ctx.config.base_image}}"
+        BASE_IMAGE_NAME: "{{ctx.config.target_image_name}}"
+        TARGET_IMAGE_NAME: "{{ctx.config.base_image_name}}"
