@@ -1,36 +1,5 @@
 #!/bin/bash
 
-[ -z "$SUDO" ] && SUDO=sudo
-
-if [ -z "$CEPHADM" ] && [ -x "/home/ubuntu/cephtest/cephadm" ]; then
-    CEPHADM="/home/ubuntu/cephtest/cephadm"
-fi
-
-if ! [ -x "$CEPHADM" ]; then
-    echo "cephadm not found. Please set \$CEPHADM"
-    exit 1
-fi
-
-echo "Using cephadm: $CEPHADM"
-
-echo "=== ENVIRONMENT VARIABLE DEBUG ==="
-echo "BASE_IMAGE='$BASE_IMAGE'"
-echo "TARGET_IMAGE='$TARGET_IMAGE'"  
-echo "BASE_IMAGE_NAME='$BASE_IMAGE_NAME'"
-echo "TARGET_IMAGE_NAME='$TARGET_IMAGE_NAME'"
-echo "=== END DEBUG ==="
-
-echo "PRE-UPGRADE STATE:"
-$SUDO $CEPHADM shell -- ceph version
-$SUDO $CEPHADM shell -- ceph orch ps
-$SUDO $CEPHADM shell -- ceph -s
-
-echo "Starting upgrade from $BASE_IMAGE_NAME to $TARGET_IMAGE_NAME..."
-$SUDO $CEPHADM shell -- ceph orch upgrade start --image "$TARGET_IMAGE"
-sleep 30
-
-cat > /tmp/upgrade_monitor.sh << 'EOF'
-
 # Upgrade monitoring script for cephadm upgrade tests
 # Monitors upgrade/downgrade completion by checking both upgrade status and daemon versions
 
@@ -148,24 +117,3 @@ $SUDO $CEPHADM_PATH shell -- ceph status
 
 echo ""
 echo "=== Upgrade Monitor Completed Successfully ==="
-EOF
-
-chmod +x /tmp/upgrade_monitor.sh
-/tmp/upgrade_monitor.sh "18.2.7" "upgrade" "$BASE_IMAGE_NAME" "$TARGET_IMAGE_NAME" "2400" "$CEPHADM" "$SUDO"
-
-echo "POST-UPGRADE STATE:"
-$SUDO $CEPHADM shell -- ceph version
-$SUDO $CEPHADM shell -- ceph orch ps
-$SUDO $CEPHADM shell -- ceph -s
-
-echo ""
-echo "=== Pre-emptive workunit cleanup ==="
-cd / 2>/dev/null || true
-
-# Clean up the working directory more aggressively
-sudo find /home/ubuntu/cephtest/mnt.0/client.0 -type f -delete 2>/dev/null || true
-sudo find /home/ubuntu/cephtest/mnt.0/client.0 -type d -empty -delete 2>/dev/null || true
-sudo rm -rf /home/ubuntu/cephtest/mnt.0/client.0/* 2>/dev/null || true
-sudo rm -rf /home/ubuntu/cephtest/mnt.0/client.0/.* 2>/dev/null || true
-
-echo "=== Pre-emptive cleanup completed ==="
