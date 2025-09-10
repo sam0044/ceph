@@ -5,11 +5,6 @@ tasks:
     clients:
         client.0:
             - test_upgrade_downgrade.sh
-    env:
-        BASE_IMAGE: *base_image
-        TARGET_IMAGE: *target_image
-        BASE_IMAGE_NAME: *base_image_name
-        TARGET_IMAGE_NAME: *target_image_name
         
 overrides:
   ceph:
