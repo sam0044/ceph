@@ -5,11 +5,6 @@ tasks:
     clients:
         client.0:
             - test_upgrade_downgrade.sh
-    env:
-      BASE_IMAGE: "quay.io/ceph-ci/ceph:18.2.7"
-      TARGET_IMAGE: "quay.io/ceph-ci/ceph:18.2.7"
-      BASE_IMAGE_NAME: "18.2.7"
-      TARGET_IMAGE_NAME: "18.2.7"
         
 overrides:
   ceph:
