@@ -2327,6 +2327,16 @@ void CDir::go_bad(bool complete)
   }
 
   state_clear(STATE_FETCHING);
+
+  // The fetch may have been a background prefetch; release its throttle
+  // slot.  Without this the counter leaks and the STATE_BACKEND_FETCH
+  // bit stays stuck, silently disabling all future backend prefetches
+  // once mds_dir_prefetch_backend_max is saturated.
+  if (state_test(STATE_BACKEND_FETCH)) {
+    state_clear(STATE_BACKEND_FETCH);
+    --mdcache->num_backend_fetching;
+  }
+
   auth_unpin(this);
   finish_waiting(WAIT_COMPLETE, -EIO);
 }
