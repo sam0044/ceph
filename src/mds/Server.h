@@ -210,6 +210,7 @@ public:
   void early_reply(const MDRequestRef& mdr, CInode *tracei, CDentry *tracedn);
   void respond_to_request(const MDRequestRef& mdr, int r = 0);
   void group_commit_flush();
+  void group_commit_defer_flush();
   void set_trace_dist(const ref_t<MClientReply> &reply, CInode *in, CDentry *dn,
 		      const MDRequestRef& mdr);
 
@@ -653,6 +654,7 @@ private:
   bool group_commit_is_adaptive() const;
   double group_commit_get_interval() const;
   bool group_commit_should_flush() const;
+  void group_commit_enqueue(const MDRequestRef& mdr);
 };
 
 static inline constexpr auto operator|(Server::RecallFlags a, Server::RecallFlags b) {

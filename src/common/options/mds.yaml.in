@@ -554,8 +554,10 @@ options:
   type: bool
   level: advanced
   desc: Batch multiple safe-reply journal entries into a single flush.
-    Only beneficial when journal latency is high (HDD or remote pool).
-    On NVMe journal the timer overhead may outweigh the batching benefit.
+    Dirty scatter lock writeback (scatter_writebehind) is batched too
+    when enabled. Only beneficial when journal latency is high (HDD or
+    remote pool). On NVMe journal the timer overhead may outweigh the
+    batching benefit.
   default: false
   services:
   - mds

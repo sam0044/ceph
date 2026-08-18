@@ -17,6 +17,10 @@
   builds, CI/CD pipelines, package installs, shared web deployments) and is
   expected to show larger gains on HDD-backed metadata pools.
 
+  The same batching also covers scatter writeback flushes (dirty scatter
+  lock updates, e.g. shared-directory workloads), where previously each
+  lock transition flushed the journal individually.
+
   New config options:
   ``mds_group_commit_enable`` (bool, default: false),
   ``mds_group_commit_max_entries`` (size, default: 8),
