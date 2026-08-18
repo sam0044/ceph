@@ -2172,6 +2172,8 @@ bool Server::group_commit_should_flush() const
 
 void Server::group_commit_flush()
 {
+  dout(5) << __func__ << " queue_size=" << group_commit_queue.size()
+          << " timer=" << group_commit_safety_timer << dendl;
   // Cancel safety-net timer if piggyback (or batch-full) fired first
   if (group_commit_safety_timer) {
     mds->timer.cancel_event(group_commit_safety_timer);
@@ -2179,11 +2181,11 @@ void Server::group_commit_flush()
   }
   if (!group_commit_queue.empty()) {
     size_t batch_size = group_commit_queue.size();
-    dout(10) << __func__ << " flushing batch of " << batch_size
-             << " entries, interval="
-             << (group_commit_is_adaptive() ? group_commit_interval
-                                            : group_commit_get_interval())
-             << dendl;
+    dout(5) << __func__ << " flushing batch of " << batch_size
+            << " entries, interval="
+            << (group_commit_is_adaptive() ? group_commit_interval
+                                           : group_commit_get_interval())
+            << dendl;
 
     if (group_commit_is_adaptive()) {
       if (group_commit_batch_count == 0)
@@ -2258,6 +2260,10 @@ void Server::group_commit_eval()
 
 void Server::group_commit_enqueue(const MDRequestRef& mdr)
 {
+  dout(5) << __func__ << " " << (mdr ? "op" : "defer")
+          << " queue_size=" << group_commit_queue.size()
+          << " timer=" << group_commit_safety_timer << dendl;
+
   // A gap longer than the maximum batching window means the previous
   // burst has ended (or this is the first op): reset the eval window
   // and the rate EMA so the next eval measures this burst's arrival
@@ -2286,6 +2292,8 @@ void Server::group_commit_enqueue(const MDRequestRef& mdr)
       : group_commit_get_interval();
     group_commit_safety_timer = mds->timer.add_event_after(
         interval, new LambdaContext([this](int) {
+          dout(5) << "group_commit safety timer fired, queue_size="
+                  << group_commit_queue.size() << dendl;
           group_commit_flush();
         }));
   }
@@ -2298,6 +2306,8 @@ void Server::group_commit_enqueue(const MDRequestRef& mdr)
 
 void Server::group_commit_defer_flush()
 {
+  dout(5) << __func__ << " queue_size=" << group_commit_queue.size()
+          << " timer=" << group_commit_safety_timer << dendl;
   // Piggyback: flush stale entries before queueing another one.
   if (group_commit_should_flush()) {
     group_commit_flush();
