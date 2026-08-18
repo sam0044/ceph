@@ -2130,27 +2130,10 @@ void Server::journal_and_reply(const MDRequestRef& mdr, CInode *in, CDentry *dn,
     mds->locker->handle_locks_for_early_reply(mdr.get());
   } else if (g_conf().get_val<bool>("mds_group_commit_enable") &&
              !mds->is_daemon_stopping()) {
-    if (group_commit_queue.empty()) {
-      group_commit_first_arrival = clock::now();
-      // Arm a safety-net timer for the case where no second op
-      // arrives to piggyback. At this point there is only 1 entry
-      // so lock contention is zero — the extra mds_lock is free.
-      double interval = group_commit_is_adaptive()
-        ? group_commit_interval
-        : group_commit_get_interval();
-      group_commit_safety_timer = mds->timer.add_event_after(
-          interval, new LambdaContext([this](int) {
-            group_commit_flush();
-          }));
-    }
-    group_commit_queue.push_back(mdr);
-    if (group_commit_queue.size() >=
-        (size_t)g_conf().get_val<Option::size_t>("mds_group_commit_max_entries")) {
-      group_commit_flush();
-    }
-    // Flush will be done by: (a) batch-full above, or (b) next
-    // arriving op's piggyback check at top of journal_and_reply,
-    // or (c) the safety-net timer above. No timer in the hot path.
+    group_commit_enqueue(mdr);
+    // Flush will be done by: (a) batch-full in group_commit_enqueue,
+    // or (b) next arriving op's piggyback check, or (c) the
+    // safety-net timer. No timer in the hot path.
   } else {
     mdlog->flush();
   }
@@ -2202,8 +2185,13 @@ void Server::group_commit_flush()
       group_commit_batch_count++;
     }
 
-    mdlog->flush();
+    // Clear the queue before flushing: entry completion contexts fire
+    // during mdlog->flush() (e.g. scatter_writebehind_finish) and may
+    // trigger a nested group_commit_defer_flush().  With the queue
+    // empty that nested call just enqueues and arms the timer instead
+    // of re-entering mdlog->flush().
     group_commit_queue.clear();
+    mdlog->flush();
 
     if (group_commit_is_adaptive() && group_commit_batch_count >= GROUP_COMMIT_EVAL_BATCHES) {
       group_commit_eval();
@@ -2239,6 +2227,48 @@ void Server::group_commit_eval()
 
   group_commit_batch_count = 0;
   group_commit_total_ops = 0;
+}
+
+void Server::group_commit_enqueue(const MDRequestRef& mdr)
+{
+  if (group_commit_queue.empty()) {
+    group_commit_first_arrival = clock::now();
+    // Arm a safety-net timer for the case where no second entry
+    // arrives to piggyback. At this point there is only 1 entry
+    // so lock contention is zero — the extra mds_lock is free.
+    double interval = group_commit_is_adaptive()
+      ? group_commit_interval
+      : group_commit_get_interval();
+    group_commit_safety_timer = mds->timer.add_event_after(
+        interval, new LambdaContext([this](int) {
+          group_commit_flush();
+        }));
+  }
+  group_commit_queue.push_back(mdr);
+  if (group_commit_queue.size() >=
+      (size_t)g_conf().get_val<Option::size_t>("mds_group_commit_max_entries")) {
+    group_commit_flush();
+  }
+}
+
+void Server::group_commit_defer_flush()
+{
+  // Piggyback: flush stale entries before queueing another one.
+  if (group_commit_should_flush()) {
+    group_commit_flush();
+  }
+
+  if (g_conf().get_val<bool>("mds_group_commit_enable") &&
+      !mds->is_daemon_stopping()) {
+    // No MDRequest is attached: the caller's journal entry completion
+    // context already gates the externally visible effect (here: the
+    // scatter lock release) on its own entry's journal safety, so
+    // batching the flush is sufficient — the null queue entry is just
+    // a token.
+    group_commit_enqueue(nullptr);
+  } else {
+    mdlog->flush();
+  }
 }
 
 void Server::submit_mdlog_entry(LogEvent *le, MDSLogContextBase *fin, const MDRequestRef& mdr,
