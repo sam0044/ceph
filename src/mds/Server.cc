@@ -809,7 +809,7 @@ void Server::handle_client_session(const cref_t<MClientSession> &m)
       });
       mdlog->submit_entry(new ESession(m->get_source_inst(), true, pv, client_metadata),
 				new C_MDS_session_finish(this, session, sseq, true, pv, fin));
-      mdlog->flush();
+      group_commit_defer_flush();
     }
     break;
 
@@ -1531,7 +1531,7 @@ void Server::journal_close_session(Session *session, int state, Context *on_safe
   auto fin = new C_MDS_session_finish(this, session, sseq, false, pv, inos_to_free, piv,
 				      session->delegated_inos, mdlog->get_current_segment(), on_safe);
   mdlog->submit_entry(le, fin);
-  mdlog->flush();
+  group_commit_defer_flush();
 
   // clean up requests, too
   while(!session->requests.empty()) {
@@ -11667,7 +11667,7 @@ void Server::handle_client_mksnap(const MDRequestRef& mdr)
   // journal the snaprealm changes
   submit_mdlog_entry(le, new C_MDS_mksnap_finish(this, mdr, diri, info),
                      mdr, __func__);
-  mdlog->flush();
+  group_commit_defer_flush();
 }
 
 void Server::_mksnap_finish(const MDRequestRef& mdr, CInode *diri, SnapInfo &info)
