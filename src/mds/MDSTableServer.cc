@@ -15,6 +15,7 @@
 #include "MDSTableServer.h"
 #include "MDSContext.h"
 #include "MDSRank.h"
+#include "Server.h"
 #include "MDLog.h"
 #include "msg/Messenger.h"
 
@@ -68,7 +69,7 @@ void MDSTableServer::handle_prepare(const cref_t<MMDSTableRequest> &req)
 				      projected_version, projected_version);
   le->mutation = req->bl;
   mds->mdlog->submit_entry(le, new C_Prepare(this, req, projected_version));
-  mds->mdlog->flush();
+  mds->server->group_commit_defer_flush();
 }
 
 void MDSTableServer::_prepare_logged(const cref_t<MMDSTableRequest> &req, version_t tid)

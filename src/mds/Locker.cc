@@ -3159,7 +3159,7 @@ bool Locker::check_inode_max_size(CInode *in, bool force_wrlock,
 
   // make max_size _increase_ timely
   if (max_increased)
-    mds->mdlog->flush();
+    mds->server->group_commit_defer_flush();
 
   return true;
 }
