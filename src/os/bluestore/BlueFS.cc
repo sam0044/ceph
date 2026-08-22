@@ -4009,28 +4009,13 @@ int BlueFS::_flush_data(FileWriter *h, uint64_t offset, uint64_t length, bool bu
 
   uint64_t bloff = 0;
   uint64_t bytes_written_slow = 0;
-  // A flush confined to one extent is a single disk write: aio buys no
-  // parallelism, and its two completion-thread bounces are ~30us of a
-  // ~35us WAL fsync.  Take the sync path only for writers that fsync
-  // from the flushing thread - RocksDB WAL files and the BlueFS journal
-  // (ino <= 1).  SST writers keep aio: they flush from
-  // append_try_flush() with no fsync behind them, so writes stay
-  // overlapped with compaction.  Multi-segment flushes keep aio too, as
-  // N serialized writes cost N device latencies.  Independent of
-  // bluefs_sync_write on purpose: the aio-wait gates keyed on it still
-  // collect aio left in flight by an earlier multi-segment flush.
-  bool fsync_follows =
-    h->writer_type == WRITER_WAL || h->file->fnode.ino <= 1;
-  bool single_segment = (x_off + length <= p->length);
-  bool sync_write =
-    cct->_conf->bluefs_sync_write || (single_segment && fsync_follows);
   while (length > 0) {
     logger->inc(l_bluefs_write_disk_count, 1);
 
     uint64_t x_len = std::min(p->length - x_off, length);
     bufferlist t;
     t.substr_of(bl, bloff, x_len);
-    if (sync_write) {
+    if (cct->_conf->bluefs_sync_write) {
       bdev[p->bdev]->write(p->offset + x_off, t, buffered, h->write_hint);
     } else {
       bdev[p->bdev]->aio_write(p->offset + x_off, t, h->iocv[p->bdev], buffered, h->write_hint);
