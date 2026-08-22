@@ -92,6 +92,10 @@
   submitters use) and that device's write-side ``bstore_aio`` thread is
   no longer created.  Other backends (io_uring, posix-aio, SPDK, pmem)
   keep both completion threads and are unchanged.
+* MGR: The ``mgr/devicehealth/mark_out_threshold`` and
+  ``mgr/devicehealth/warn_threshold`` defaults are now 14 and 42 days (were 28
+  and 84), matching the two- and six-week bands the failure predictors report.
+  Set them explicitly to keep the old values.
 
 * CephFS: The ``client_force_lazyio`` configuration option is now correctly marked
   as not supporting runtime updates. Previously, the configuration schema indicated
