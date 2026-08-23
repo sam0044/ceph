@@ -110,6 +110,18 @@ void MDLog::create_logger()
   g_ceph_context->get_perfcounters_collection()->add(logger);
 }
 
+double MDLog::get_journal_latency() const
+{
+  // Average journal flush latency in seconds, measured by the
+  // Journaler via the mds_log.jlat time-avg counter; 0 if not yet
+  // measured.  Used by the group commit tuner to decide whether
+  // batching saves more than it costs.
+  if (!logger)
+    return 0.0;
+  auto [sum_ns, count] = logger->get_tavg_ns(l_mdl_jlat);
+  return count ? sum_ns / 1000000000.0 : 0.0;
+}
+
 void MDLog::set_write_iohint(unsigned iohint_flags)
 {
   journaler->set_write_iohint(iohint_flags);

@@ -2132,10 +2132,14 @@ void Server::journal_and_reply(const MDRequestRef& mdr, CInode *in, CDentry *dn,
     mds->locker->handle_locks_for_early_reply(mdr.get());
   } else if (g_conf().get_val<bool>("mds_group_commit_enable") &&
              !mds->is_daemon_stopping()) {
-    group_commit_enqueue(mdr);
-    // Flush will be done by: (a) batch-full in group_commit_enqueue,
-    // or (b) next arriving op's piggyback check, or (c) the
-    // safety-net timer. No timer in the hot path.
+    if (group_commit_should_bypass()) {
+      group_commit_direct_flush();
+    } else {
+      group_commit_enqueue(mdr);
+      // Flush will be done by: (a) batch-full in group_commit_enqueue,
+      // or (b) next arriving op's piggyback check, or (c) the
+      // safety-net timer. No timer in the hot path.
+    }
   } else {
     mdlog->flush();
   }
@@ -2152,6 +2156,66 @@ double Server::group_commit_get_interval() const
   return (cfg > 0) ? cfg : GROUP_COMMIT_MIN_INTERVAL;
 }
 
+double Server::group_commit_jlat() const
+{
+  return mds->mdlog ? mds->mdlog->get_journal_latency() : 0.0;
+}
+
+double Server::group_commit_effective_interval() const
+{
+  // The economics gate is authoritative: when batching can't pay for
+  // its wait, shrink the window to the minimum interval.  Callers take
+  // the direct-flush path in that case anyway; this fallback covers a
+  // queue that already holds entries when the gate flips.
+  if (group_commit_should_bypass())
+    return GROUP_COMMIT_MIN_INTERVAL;
+  return group_commit_is_adaptive()
+    ? group_commit_interval
+    : group_commit_get_interval();
+}
+
+bool Server::group_commit_should_bypass() const
+{
+  // Skip the queue entirely when batching cannot pay for its wait, so
+  // enabled group commit is exactly the direct-flush path: the caller
+  // calls mdlog->flush() inline, with no timer arm/cancel churn and no
+  // mds_lock handoff (the safety-net timer fires in the SafeTimer
+  // thread, which must acquire mds_lock just to kick the flush — a
+  // real cost when arrivals are sparse, e.g. fsync waves, and nothing
+  // piggybacks).
+  //
+  // Deferring the first entry of a batch by window I collects
+  // n = 1 + rate*I entries at total wait I*(n+1)/2 and saves (n-1)
+  // flushes worth jlat each, so it breaks even at
+  // rate*jlat = 1 + rate*I/2.  Adaptive mode picks
+  // I = (TARGET_BATCH-1)/rate, which makes the right-hand side
+  // (TARGET_BATCH+1)/2 = 2.5; fixed mode uses the configured window.
+  //
+  // Without a measured rate (the first second after startup) deferral
+  // is pure risk: the direct path's bookkeeping seeds the rate EMA
+  // within a second anyway, so bypass.
+  double jlat = group_commit_jlat();
+  if (jlat <= 0.0)
+    return true;
+  double rate = group_commit_arrival_rate;
+  if (rate <= 0.0)
+    return true;
+  if (group_commit_is_adaptive())
+    return rate * jlat < (GROUP_COMMIT_TARGET_BATCH + 1.0) / 2.0;
+  double interval = group_commit_get_interval();
+  return rate * jlat < 1.0 + rate * interval / 2.0;
+}
+
+void Server::group_commit_direct_flush()
+{
+  // Direct-flush path taken when batching cannot pay for its wait (see
+  // group_commit_should_bypass()).  Keep the rate bookkeeping running
+  // so the EMA stays fresh: if the journal slows down or arrivals get
+  // dense, the gate can reopen on the next one-second refresh.
+  group_commit_note_ops(1);
+  mdlog->flush();
+}
+
 bool Server::group_commit_should_flush() const
 {
   if (group_commit_queue.empty())
@@ -2161,9 +2225,7 @@ bool Server::group_commit_should_flush() const
       (size_t)g_conf().get_val<Option::size_t>("mds_group_commit_max_entries"))
     return true;
 
-  double max_wait = group_commit_is_adaptive()
-    ? group_commit_interval
-    : group_commit_get_interval();
+  double max_wait = group_commit_effective_interval();
 
   auto elapsed = std::chrono::duration<double>(
       clock::now() - group_commit_first_arrival);
@@ -2182,17 +2244,12 @@ void Server::group_commit_flush()
   if (!group_commit_queue.empty()) {
     size_t batch_size = group_commit_queue.size();
     dout(5) << __func__ << " flushing batch of " << batch_size
-            << " entries, interval="
-            << (group_commit_is_adaptive() ? group_commit_interval
-                                           : group_commit_get_interval())
+            << " entries, interval=" << group_commit_effective_interval()
             << dendl;
 
-    if (group_commit_is_adaptive()) {
-      if (group_commit_batch_count == 0)
-        group_commit_eval_start = clock::now();
-      group_commit_total_ops += batch_size;
-      group_commit_batch_count++;
-    }
+    // Rate bookkeeping runs on both flush paths: the arrival-rate EMA
+    // feeds the batching economics check in group_commit_should_bypass().
+    group_commit_note_ops(batch_size);
 
     // Clear the queue before flushing: entry completion contexts fire
     // during mdlog->flush() (e.g. scatter_writebehind_finish) and may
@@ -2201,61 +2258,70 @@ void Server::group_commit_flush()
     // of re-entering mdlog->flush().
     group_commit_queue.clear();
     mdlog->flush();
-
-    if (group_commit_is_adaptive() && group_commit_batch_count >= GROUP_COMMIT_EVAL_BATCHES) {
-      group_commit_eval();
-    }
   }
 }
 
-void Server::group_commit_eval()
+void Server::group_commit_note_ops(uint64_t ops)
 {
-  if (group_commit_batch_count == 0) return;
-
-  double avg_size = (double)group_commit_total_ops / group_commit_batch_count;
+  // Count ops on both flush paths and refresh the arrival-rate EMA
+  // once per second.  The one-second window measures the *sustained*
+  // arrival rate: a per-batch window (every N ops) reads the
+  // instantaneous rate of a bursty arrival wave — e.g. an
+  // mclock-throttled OSD releasing ops in quanta — and would
+  // false-open the economics gate, batching deferrals into the fsync
+  // critical path.
+  group_commit_rate_ops += ops;
+  auto now = clock::now();
+  if (group_commit_rate_stamp == clock::zero()) {
+    group_commit_rate_stamp = now;
+    return;
+  }
   double elapsed = std::chrono::duration<double>(
-      clock::now() - group_commit_eval_start).count();
-  double arrival_rate = elapsed > 0
-    ? (double)group_commit_total_ops / elapsed : 0.0;
+      now - group_commit_rate_stamp).count();
+  if (elapsed < 1.0)
+    return;
+  uint64_t window_ops = group_commit_rate_ops;
+  double arrival_rate = (double)window_ops / elapsed;
 
   // Smooth with an EMA so a single window can't cause oscillation.
   group_commit_arrival_rate = group_commit_arrival_rate == 0.0
     ? arrival_rate
     : 0.6 * group_commit_arrival_rate + 0.4 * arrival_rate;
+  group_commit_rate_ops = 0;
+  group_commit_rate_stamp = now;
 
-  double old_interval = group_commit_interval;
-  double rate = group_commit_arrival_rate;
+  if (group_commit_is_adaptive()) {
+    double old_interval = group_commit_interval;
+    double rate = group_commit_arrival_rate;
+    double jlat = group_commit_jlat();
 
-  dout(10) << __func__ << " avg_batch=" << avg_size
-           << " batches=" << group_commit_batch_count
-           << " total_ops=" << group_commit_total_ops
-           << " elapsed=" << elapsed
-           << " rate=" << rate << " ops/s"
-           << " interval=" << group_commit_interval << dendl;
+    dout(10) << __func__ << " window_ops=" << window_ops
+             << " elapsed=" << elapsed
+             << " rate=" << rate << " ops/s"
+             << " jlat=" << jlat << "s"
+             << " interval=" << group_commit_interval << dendl;
 
-  // With interval I the expected batch is 1 + rate*I: one entry arms the
-  // timer, the rest arrive while it waits.  Pick I to collect about
-  // GROUP_COMMIT_TARGET_BATCH ops per flush.  If even the maximum window
-  // cannot collect a second op, stay at the minimum interval — growing
-  // would only add latency with no batching benefit.
-  if (rate * GROUP_COMMIT_MAX_INTERVAL < 1.0) {
-    group_commit_interval = GROUP_COMMIT_MIN_INTERVAL;
-  } else {
-    double target = (GROUP_COMMIT_TARGET_BATCH - 1.0) / rate;
-    group_commit_interval = std::clamp(target,
-                                       GROUP_COMMIT_MIN_INTERVAL,
-                                       GROUP_COMMIT_MAX_INTERVAL);
+    // With interval I the expected batch is 1 + rate*I: one entry arms
+    // the timer, the rest arrive while it waits.  Pick I to collect about
+    // GROUP_COMMIT_TARGET_BATCH ops per flush, but only when the flush
+    // cost justifies the wait — group_commit_should_bypass() derives the
+    // breakeven (rate*jlat >= (TARGET_BATCH+1)/2).
+    if (group_commit_should_bypass()) {
+      group_commit_interval = GROUP_COMMIT_MIN_INTERVAL;
+    } else {
+      double target = (GROUP_COMMIT_TARGET_BATCH - 1.0) / rate;
+      group_commit_interval = std::clamp(target,
+                                         GROUP_COMMIT_MIN_INTERVAL,
+                                         GROUP_COMMIT_MAX_INTERVAL);
+    }
+
+    if (group_commit_interval != old_interval) {
+      dout(5) << __func__ << " adaptive interval " << old_interval
+              << " -> " << group_commit_interval
+              << " (rate=" << rate << " ops/s"
+              << ", jlat=" << jlat << "s)" << dendl;
+    }
   }
-
-  if (group_commit_interval != old_interval) {
-    dout(5) << __func__ << " adaptive interval " << old_interval
-            << " -> " << group_commit_interval
-            << " (rate=" << rate << " ops/s, avg_batch=" << avg_size << ")"
-            << dendl;
-  }
-
-  group_commit_batch_count = 0;
-  group_commit_total_ops = 0;
 }
 
 void Server::group_commit_enqueue(const MDRequestRef& mdr)
@@ -2265,19 +2331,14 @@ void Server::group_commit_enqueue(const MDRequestRef& mdr)
           << " timer=" << group_commit_safety_timer << dendl;
 
   // A gap longer than the maximum batching window means the previous
-  // burst has ended (or this is the first op): reset the eval window
-  // and the rate EMA so the next eval measures this burst's arrival
-  // rate instead of diluting it with the preceding idle time.  Reset
-  // the interval too: the stale value was tuned for the old rate, and
-  // between bursts a lone entry should flush promptly (MIN) anyway.
+  // burst has ended (or this is the first op): drop the interval tuned
+  // for the old rate so a lone entry flushes promptly (MIN) instead of
+  // waiting a stale window.  The one-second rate window needs no reset.
   auto now = clock::now();
-  if (group_commit_last_enqueue != clock::zero() &&
+  if (group_commit_is_adaptive() &&
+      group_commit_last_enqueue != clock::zero() &&
       now - group_commit_last_enqueue >
         std::chrono::duration<double>(GROUP_COMMIT_MAX_INTERVAL)) {
-    group_commit_batch_count = 0;
-    group_commit_total_ops = 0;
-    group_commit_eval_start = clock::zero();
-    group_commit_arrival_rate = 0.0;
     group_commit_interval = GROUP_COMMIT_MIN_INTERVAL;
   }
   group_commit_last_enqueue = now;
@@ -2287,9 +2348,7 @@ void Server::group_commit_enqueue(const MDRequestRef& mdr)
     // Arm a safety-net timer for the case where no second entry
     // arrives to piggyback. At this point there is only 1 entry
     // so lock contention is zero — the extra mds_lock is free.
-    double interval = group_commit_is_adaptive()
-      ? group_commit_interval
-      : group_commit_get_interval();
+    double interval = group_commit_effective_interval();
     group_commit_safety_timer = mds->timer.add_event_after(
         interval, new LambdaContext([this](int) {
           dout(5) << "group_commit safety timer fired, queue_size="
@@ -2315,12 +2374,16 @@ void Server::group_commit_defer_flush()
 
   if (g_conf().get_val<bool>("mds_group_commit_enable") &&
       !mds->is_daemon_stopping()) {
-    // No MDRequest is attached: the caller's journal entry completion
-    // context already gates the externally visible effect (here: the
-    // scatter lock release) on its own entry's journal safety, so
-    // batching the flush is sufficient — the null queue entry is just
-    // a token.
-    group_commit_enqueue(nullptr);
+    if (group_commit_should_bypass()) {
+      group_commit_direct_flush();
+    } else {
+      // No MDRequest is attached: the caller's journal entry completion
+      // context already gates the externally visible effect (here: the
+      // scatter lock release) on its own entry's journal safety, so
+      // batching the flush is sufficient — the null queue entry is just
+      // a token.
+      group_commit_enqueue(nullptr);
+    }
   } else {
     mdlog->flush();
   }

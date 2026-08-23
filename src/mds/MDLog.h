@@ -78,6 +78,7 @@ public:
   }
 
   void create_logger();
+  double get_journal_latency() const;
   void set_write_iohint(unsigned iohint_flags);
 
   LogSegmentRef const& peek_current_segment() {
