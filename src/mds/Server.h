@@ -646,9 +646,13 @@ private:
   static constexpr int GROUP_COMMIT_EVAL_BATCHES = 8;  // min batches before eval
   static constexpr double GROUP_COMMIT_MIN_INTERVAL = 0.000005;  // 5us
   static constexpr double GROUP_COMMIT_MAX_INTERVAL = 0.005;     // 5ms
+  static constexpr double GROUP_COMMIT_TARGET_BATCH = 4.0;  // target ops per flush
   int group_commit_batch_count = 0;
   int group_commit_total_ops = 0;
   double group_commit_interval = GROUP_COMMIT_MIN_INTERVAL;  // start at 5us
+  time group_commit_eval_start = clock::zero();
+  double group_commit_arrival_rate = 0.0;  // EMA, ops/s entering the queue
+  time group_commit_last_enqueue = clock::zero();  // burst-gap detection
 
   void group_commit_eval();
   bool group_commit_is_adaptive() const;
