@@ -113,13 +113,40 @@ void MDLog::create_logger()
 double MDLog::get_journal_latency() const
 {
   // Average journal flush latency in seconds, measured by the
-  // Journaler via the mds_log.jlat time-avg counter; 0 if not yet
-  // measured.  Used by the group commit tuner to decide whether
-  // batching saves more than it costs.
+  // Journaler via the mds_log.jlat time-avg counter, over the most
+  // recent one-second sampling window.  The group commit economics
+  // gate must react to the *current* journal speed: the lifetime
+  // average is dragged up by historical slow phases (e.g. a throttled
+  // test or a WAL blip) and would keep the gate open — and batching
+  // enabled — long after the journal got fast again.  get_tavg_ns()
+  // returns the {sum in ns, sample count} pair, so a window average
+  // is the delta of both divided by each other.
   if (!logger)
     return 0.0;
   auto [sum_ns, count] = logger->get_tavg_ns(l_mdl_jlat);
-  return count ? sum_ns / 1000000000.0 : 0.0;
+  auto now = ceph::coarse_mono_clock::now();
+  if (jlat_last_stamp != ceph::coarse_mono_clock::zero() &&
+      now - jlat_last_stamp >= std::chrono::seconds(1)) {
+    if (count > jlat_last_count && sum_ns >= jlat_last_sum) {
+      jlat_recent = (static_cast<double>(sum_ns - jlat_last_sum) /
+                     static_cast<double>(count - jlat_last_count)) /
+                    1000000000.0;
+    }
+    jlat_last_sum = sum_ns;
+    jlat_last_count = count;
+    jlat_last_stamp = now;
+  } else if (jlat_last_stamp == ceph::coarse_mono_clock::zero()) {
+    // First call: seed the snapshot; fall through to the lifetime
+    // average until the first window completes.
+    jlat_last_sum = sum_ns;
+    jlat_last_count = count;
+    jlat_last_stamp = now;
+  }
+  if (jlat_recent > 0.0)
+    return jlat_recent;
+  return count
+    ? (static_cast<double>(sum_ns) / static_cast<double>(count)) / 1000000000.0
+    : 0.0;
 }
 
 void MDLog::set_write_iohint(unsigned iohint_flags)
