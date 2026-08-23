@@ -556,8 +556,9 @@ options:
   desc: Batch multiple safe-reply journal entries into a single flush.
     Dirty scatter lock writeback (scatter_writebehind) is batched too
     when enabled. Only beneficial when journal latency is high (HDD or
-    remote pool). On NVMe journal the timer overhead may outweigh the
-    batching benefit.
+    remote pool); when batching cannot pay for its wait the queue is
+    bypassed entirely and entries take the direct-flush path, so
+    enabling this cannot regress fast-journal workloads.
   default: false
   services:
   - mds
@@ -578,7 +579,12 @@ options:
   desc: Maximum time in seconds to wait before flushing batched safe-reply
     journal entries. Set to 0 for adaptive mode, which self-tunes from the
     observed op arrival rate and targets about 4 ops per flush (bounded by
-    mds_group_commit_max_entries).
+    mds_group_commit_max_entries). In both modes the wait is only applied
+    when batching breaks even at the observed arrival rate (arrival rate
+    times flush latency >= 1 + rate*interval/2; adaptive mode simplifies
+    this to >= 2.5 at the target batch size). Otherwise the queue is
+    bypassed entirely and entries take the direct-flush path, so enabling
+    group commit cannot add latency on fast journals.
   default: 0
   services:
   - mds

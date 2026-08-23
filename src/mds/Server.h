@@ -210,6 +210,7 @@ public:
   void early_reply(const MDRequestRef& mdr, CInode *tracei, CDentry *tracedn);
   void respond_to_request(const MDRequestRef& mdr, int r = 0);
   void group_commit_flush();
+  void group_commit_direct_flush();
   void group_commit_defer_flush();
   void set_trace_dist(const ref_t<MClientReply> &reply, CInode *in, CDentry *dn,
 		      const MDRequestRef& mdr);
@@ -642,21 +643,26 @@ private:
   time group_commit_first_arrival = clock::zero();
   Context *group_commit_safety_timer = nullptr;
 
-  // Adaptive tuning state
-  static constexpr int GROUP_COMMIT_EVAL_BATCHES = 8;  // min batches before eval
+  // Adaptive tuning state.  The arrival-rate EMA is refreshed once per
+  // second from ops counted in that window: a per-batch window (every
+  // N ops) would measure the instantaneous rate of a bursty arrival
+  // wave — e.g. under an mclock-throttled OSD — and false-open the
+  // economics gate, inflating the fsync critical path.
   static constexpr double GROUP_COMMIT_MIN_INTERVAL = 0.000005;  // 5us
   static constexpr double GROUP_COMMIT_MAX_INTERVAL = 0.005;     // 5ms
   static constexpr double GROUP_COMMIT_TARGET_BATCH = 4.0;  // target ops per flush
-  int group_commit_batch_count = 0;
-  int group_commit_total_ops = 0;
+  uint64_t group_commit_rate_ops = 0;   // ops since last rate refresh
+  time group_commit_rate_stamp = clock::zero();
   double group_commit_interval = GROUP_COMMIT_MIN_INTERVAL;  // start at 5us
-  time group_commit_eval_start = clock::zero();
   double group_commit_arrival_rate = 0.0;  // EMA, ops/s entering the queue
   time group_commit_last_enqueue = clock::zero();  // burst-gap detection
 
-  void group_commit_eval();
+  void group_commit_note_ops(uint64_t ops);
   bool group_commit_is_adaptive() const;
   double group_commit_get_interval() const;
+  double group_commit_effective_interval() const;
+  double group_commit_jlat() const;
+  bool group_commit_should_bypass() const;
   bool group_commit_should_flush() const;
   void group_commit_enqueue(const MDRequestRef& mdr);
 };
