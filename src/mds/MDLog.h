@@ -273,6 +273,15 @@ protected:
 
   PerfCounters *logger = nullptr;
 
+  // Recent-journal-latency sampling for the group commit economics
+  // gate: {sum, count} snapshot of the jlat time-avg counter, rebased
+  // once per second, plus the latency averaged over the last window.
+  // Kept here (mutable) so get_journal_latency() can stay const.
+  mutable uint64_t jlat_last_sum = 0;
+  mutable uint64_t jlat_last_count = 0;
+  mutable ceph::coarse_mono_time jlat_last_stamp = ceph::coarse_mono_clock::zero();
+  mutable double jlat_recent = 0.0;
+
   bool already_replayed = false;
 
   std::vector<MDSContext*> waitfor_replay;
