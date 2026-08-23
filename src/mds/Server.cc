@@ -26,6 +26,8 @@
 #include <boost/fusion/include/std_pair.hpp>
 #include <boost/range/adaptor/reversed.hpp>
 
+#include <algorithm>
+
 #include "MDSRank.h"
 #include "Locker.h"
 #include "MDCache.h"
@@ -2178,9 +2180,14 @@ void Server::group_commit_flush()
   if (!group_commit_queue.empty()) {
     size_t batch_size = group_commit_queue.size();
     dout(10) << __func__ << " flushing batch of " << batch_size
-             << " entries, interval=" << group_commit_interval << dendl;
+             << " entries, interval="
+             << (group_commit_is_adaptive() ? group_commit_interval
+                                            : group_commit_get_interval())
+             << dendl;
 
     if (group_commit_is_adaptive()) {
+      if (group_commit_batch_count == 0)
+        group_commit_eval_start = clock::now();
       group_commit_total_ops += batch_size;
       group_commit_batch_count++;
     }
@@ -2204,25 +2211,45 @@ void Server::group_commit_eval()
   if (group_commit_batch_count == 0) return;
 
   double avg_size = (double)group_commit_total_ops / group_commit_batch_count;
+  double elapsed = std::chrono::duration<double>(
+      clock::now() - group_commit_eval_start).count();
+  double arrival_rate = elapsed > 0
+    ? (double)group_commit_total_ops / elapsed : 0.0;
+
+  // Smooth with an EMA so a single window can't cause oscillation.
+  group_commit_arrival_rate = group_commit_arrival_rate == 0.0
+    ? arrival_rate
+    : 0.6 * group_commit_arrival_rate + 0.4 * arrival_rate;
+
   double old_interval = group_commit_interval;
+  double rate = group_commit_arrival_rate;
 
   dout(10) << __func__ << " avg_batch=" << avg_size
            << " batches=" << group_commit_batch_count
            << " total_ops=" << group_commit_total_ops
+           << " elapsed=" << elapsed
+           << " rate=" << rate << " ops/s"
            << " interval=" << group_commit_interval << dendl;
 
-  if (avg_size >= 3.0) {
-    group_commit_interval = std::min(group_commit_interval * 2.0, GROUP_COMMIT_MAX_INTERVAL);
-  } else if (avg_size >= 2.0) {
-    group_commit_interval = std::min(group_commit_interval * 1.5, GROUP_COMMIT_MAX_INTERVAL);
+  // With interval I the expected batch is 1 + rate*I: one entry arms the
+  // timer, the rest arrive while it waits.  Pick I to collect about
+  // GROUP_COMMIT_TARGET_BATCH ops per flush.  If even the maximum window
+  // cannot collect a second op, stay at the minimum interval — growing
+  // would only add latency with no batching benefit.
+  if (rate * GROUP_COMMIT_MAX_INTERVAL < 1.0) {
+    group_commit_interval = GROUP_COMMIT_MIN_INTERVAL;
   } else {
-    group_commit_interval = std::max(group_commit_interval * 0.5, GROUP_COMMIT_MIN_INTERVAL);
+    double target = (GROUP_COMMIT_TARGET_BATCH - 1.0) / rate;
+    group_commit_interval = std::clamp(target,
+                                       GROUP_COMMIT_MIN_INTERVAL,
+                                       GROUP_COMMIT_MAX_INTERVAL);
   }
 
   if (group_commit_interval != old_interval) {
     dout(5) << __func__ << " adaptive interval " << old_interval
             << " -> " << group_commit_interval
-            << " (avg_batch=" << avg_size << ")" << dendl;
+            << " (rate=" << rate << " ops/s, avg_batch=" << avg_size << ")"
+            << dendl;
   }
 
   group_commit_batch_count = 0;
@@ -2231,8 +2258,26 @@ void Server::group_commit_eval()
 
 void Server::group_commit_enqueue(const MDRequestRef& mdr)
 {
+  // A gap longer than the maximum batching window means the previous
+  // burst has ended (or this is the first op): reset the eval window
+  // and the rate EMA so the next eval measures this burst's arrival
+  // rate instead of diluting it with the preceding idle time.  Reset
+  // the interval too: the stale value was tuned for the old rate, and
+  // between bursts a lone entry should flush promptly (MIN) anyway.
+  auto now = clock::now();
+  if (group_commit_last_enqueue != clock::zero() &&
+      now - group_commit_last_enqueue >
+        std::chrono::duration<double>(GROUP_COMMIT_MAX_INTERVAL)) {
+    group_commit_batch_count = 0;
+    group_commit_total_ops = 0;
+    group_commit_eval_start = clock::zero();
+    group_commit_arrival_rate = 0.0;
+    group_commit_interval = GROUP_COMMIT_MIN_INTERVAL;
+  }
+  group_commit_last_enqueue = now;
+
   if (group_commit_queue.empty()) {
-    group_commit_first_arrival = clock::now();
+    group_commit_first_arrival = now;
     // Arm a safety-net timer for the case where no second entry
     // arrives to piggyback. At this point there is only 1 entry
     // so lock contention is zero — the extra mds_lock is free.

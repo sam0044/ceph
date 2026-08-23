@@ -576,7 +576,9 @@ options:
   type: float
   level: advanced
   desc: Maximum time in seconds to wait before flushing batched safe-reply
-    journal entries. Set to 0 for adaptive mode (auto-tuning based on workload).
+    journal entries. Set to 0 for adaptive mode, which self-tunes from the
+    observed op arrival rate and targets about 4 ops per flush (bounded by
+    mds_group_commit_max_entries).
   default: 0
   services:
   - mds
