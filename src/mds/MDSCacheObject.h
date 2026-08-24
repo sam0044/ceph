@@ -14,7 +14,8 @@
 #include "mdstypes.h"
 #include "include/elist.h"
 
-#define MDS_REF_SET      // define me for improved debug output, sanity checking
+// per-pin-type ref tracking is runtime-controlled by the mds_ref_set config
+// option (src/common/options/mds.yaml.in); startup-only
 //#define MDS_AUTHPIN_SET  // define me for debugging auth pin leaks
 //#define MDS_VERIFY_FRAGSTAT    // do (slow) sanity checking on frags
 
@@ -110,16 +111,22 @@ class MDSCacheObject {
     return authority().second != CDIR_AUTH_UNKNOWN;
   }
 
+  // per-pin-type ref tracking, controlled by the mds_ref_set config
+  // option (startup-only).  Read once per process; the first use happens
+  // early in rank lifetime, well after config is loaded.
+  static bool ref_set_enabled() {
+    static const bool enabled = g_conf().get_val<bool>("mds_ref_set");
+    return enabled;
+  }
+
   int get_num_ref(int by = -1) const {
-#ifdef MDS_REF_SET
-    if (by >= 0) {
-      if (ref_map.find(by) == ref_map.end()) {
+    if (ref_set_enabled() && by >= 0) {
+      auto it = ref_map.find(by);
+      if (it == ref_map.end()) {
 	return 0;
-      } else {
-        return ref_map.find(by)->second;
       }
+      return it->second;
     }
-#endif
     return ref;
   }
   virtual std::string_view pin_name(int by) const = 0;
@@ -128,24 +135,18 @@ class MDSCacheObject {
 
   virtual void last_put() {}
   virtual void bad_put(int by) {
-#ifdef MDS_REF_SET
-    ceph_assert(ref_map[by] > 0);
-#endif
+    if (ref_set_enabled())
+      ceph_assert(ref_map[by] > 0);
     ceph_assert(ref > 0);
   }
   virtual void _put() {}
   void put(int by) {
-#ifdef MDS_REF_SET
-    if (ref == 0 || ref_map[by] == 0) {
-#else
-    if (ref == 0) {
-#endif
+    if (ref == 0 || (ref_set_enabled() && ref_map[by] == 0)) {
       bad_put(by);
     } else {
       ref--;
-#ifdef MDS_REF_SET
-      ref_map[by]--;
-#endif
+      if (ref_set_enabled())
+	ref_map[by]--;
       if (ref == 0)
 	last_put();
       if (state_test(STATE_NOTIFYREF))
@@ -155,30 +156,29 @@ class MDSCacheObject {
 
   virtual void first_get() {}
   virtual void bad_get(int by) {
-#ifdef MDS_REF_SET
-    ceph_assert(by < 0 || ref_map[by] == 0);
-#endif
+    if (ref_set_enabled())
+      ceph_assert(by < 0 || ref_map[by] == 0);
     ceph_abort();
   }
   void get(int by) {
     if (ref == 0)
       first_get();
     ref++;
-#ifdef MDS_REF_SET
-    if (ref_map.find(by) == ref_map.end())
-      ref_map[by] = 0;
-    ref_map[by]++;
-#endif
+    if (ref_set_enabled()) {
+      if (ref_map.find(by) == ref_map.end())
+	ref_map[by] = 0;
+      ref_map[by]++;
+    }
   }
 
   void print_pin_set(std::ostream& out) const {
-#ifdef MDS_REF_SET
-    for(auto const &p : ref_map) {
-      out << " " << pin_name(p.first) << "=" << p.second;
+    if (ref_set_enabled()) {
+      for(auto const &p : ref_map) {
+        out << " " << pin_name(p.first) << "=" << p.second;
+      }
+    } else {
+      out << " nref=" << ref;
     }
-#else
-    out << " nref=" << ref;
-#endif
   }
 
   int get_num_auth_pins() const { return auth_pins; }
@@ -309,9 +309,9 @@ class MDSCacheObject {
 
   // pins
   __s32      ref = 0;       // reference count
-#ifdef MDS_REF_SET
+  // per-pin-type counts, populated only while the mds_ref_set config
+  // option is enabled (startup-only); empty otherwise
   mempool::mds_co::flat_map<int,int> ref_map;
-#endif
 
   int auth_pins = 0;
 #ifdef MDS_AUTHPIN_SET

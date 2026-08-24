@@ -61,14 +61,14 @@ void MDSCacheObject::dump(ceph::Formatter *f) const
   f->dump_bool("is_frozen", is_frozen());
   f->dump_bool("is_freezing", is_freezing());
 
-#ifdef MDS_REF_SET
+  if (ref_set_enabled()) {
     f->open_object_section("pins");
     for(const auto& p : ref_map) {
       f->dump_int(pin_name(p.first), p.second);
     }
     f->close_section();
-#endif
-    f->dump_int("nref", ref);
+  }
+  f->dump_int("nref", ref);
 }
 
 /*
