@@ -616,6 +616,16 @@ options:
   default: false
   services:
   - mds
+- name: mds_ref_set
+  type: bool
+  level: dev
+  default: false
+  services:
+  - mds
+  fmt_desc: Track per-pin-type reference counts on MDSCacheObjects for
+    debugging reference leaks. Startup only.
+  flags:
+  - startup
 - name: mds_log_event_large_threshold
   type: uint
   level: advanced
