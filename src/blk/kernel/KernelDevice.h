@@ -69,9 +69,15 @@ private:
 
   struct AioCompletionThread : public Thread {
     KernelDevice *bdev;
+    io_queue_t *queue = nullptr;  ///< the ring this thread reaps
     explicit AioCompletionThread(KernelDevice *b) : bdev(b) {}
+    // hides Thread::create(): the queue is bound with the name
+    void create(const char *name, io_queue_t *q) {
+      queue = q;
+      Thread::create(name);
+    }
     void *entry() override {
-      bdev->_aio_thread();
+      bdev->_aio_thread(queue);
       return NULL;
     }
   } aio_thread;
@@ -93,11 +99,14 @@ private:
   virtual int _post_open() { return 0; }  // hook for child implementations
   virtual void  _pre_close() { }  // hook for child implementations
 
-  void _aio_thread();
+  void _aio_thread(io_queue_t *q);
+  // wake one completion thread out of get_next_completed(), join it,
+  // and drain whatever it left unreaped
+  void _aio_thread_wake(io_queue_t *q, AioCompletionThread &thread);
   // one reap pass: get_next_completed(timeout_ms) + full completion
   // processing (shared by the completion thread and any other caller
   // driving completions)
-  int _reap_completions(int timeout_ms, int max);
+  int _reap_completions(io_queue_t *q, int timeout_ms, int max);
   void _discard_thread(DiscardThread* thr);
   bool _queue_discard(interval_set<uint64_t> &to_release);
   bool try_discard(interval_set<uint64_t> &to_release,
