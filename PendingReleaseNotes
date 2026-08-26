@@ -92,6 +92,12 @@
   submitters use) and that device's write-side ``bstore_aio`` thread is
   no longer created.  Other backends (io_uring, posix-aio, SPDK, pmem)
   keep both completion threads and are unchanged.
+* MGR: ``ceph device ls`` no longer shows ``now`` for every device whose
+  predicted failure window has opened. An open window now shows the time left
+  until its upper bound, an expired one shows ``overdue``, and an open-ended
+  window whose lower bound has passed shows nothing. Previously even healthy
+  devices could show ``now``.
+
 * MGR: The ``mgr/devicehealth/mark_out_threshold`` and
   ``mgr/devicehealth/warn_threshold`` defaults are now 14 and 42 days (were 28
   and 84), matching the two- and six-week bands the failure predictors report.
