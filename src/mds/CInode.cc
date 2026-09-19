@@ -4076,22 +4076,35 @@ int CInode::encode_inodestat(bufferlist& bl, Session *session,
     xattr_version = 0;
   }
 
-  bufferlist optmdbl;
-  {
-    decltype(InodeStat::optmetadata) optmetadata;
-    using kind_t = decltype(optmetadata)::optkind_t;
+  // Only directories carry a charmap, and only when one has been configured,
+  // so the no-charmap encoding is a constant. Compute its length once rather
+  // than staging it in a bufferlist per encoded inode; readdir encodes every
+  // inode in the directory. Both that length and the else branch below must
+  // encode the same type as the charmap case, hence the one alias.
+  using optmetadata_t = decltype(InodeStat::optmetadata);
+  static const unsigned empty_optmetadata_len = []() {
+    bufferlist tmp;
+    optmetadata_t empty;
+    encode(empty, tmp);
+    return tmp.length();
+  }();
 
-    auto* csp = get_charmap();
-    if (csp) {
-      dout(25) << *csp << dendl;
-      auto& opt = optmetadata.get_or_create_opt(kind_t::CHARMAP);
-      auto& cs = opt.template get_meta< charmap_md_t >();
-      cs = *csp;
-      dout(25) << "cs now " << cs << dendl;
-    }
+  auto* csp = get_charmap();
+  bufferlist optmdbl;
+  if (csp) {
+    optmetadata_t optmetadata;
+    using kind_t = optmetadata_t::optkind_t;
+
+    dout(25) << *csp << dendl;
+    auto& opt = optmetadata.get_or_create_opt(kind_t::CHARMAP);
+    auto& cs = opt.template get_meta< charmap_md_t >();
+    cs = *csp;
+    dout(25) << "cs now " << cs << dendl;
 
     encode(optmetadata, optmdbl);
   }
+  const unsigned optmetadata_len = csp ? optmdbl.length()
+                                       : empty_optmetadata_len;
 
   // do we have room?
   if (max_bytes) {
@@ -4106,7 +4119,7 @@ int CInode::encode_inodestat(bufferlist& bl, Session *session,
       sizeof(struct ceph_dir_layout) // dir_layout
       + 4 + file_i->fscrypt_auth.size() // len + data
       + 4 + file_i->fscrypt_file.size() // len + data
-      + optmdbl.length()
+      + optmetadata_len
       ;
 
     if (xattr_version) {
@@ -4316,7 +4329,12 @@ int CInode::encode_inodestat(bufferlist& bl, Session *session,
       !file_i->fscrypt_auth.empty(),
       file_i->fscrypt_auth,
       file_i->fscrypt_file);
-    encode_nohead(optmdbl, bl);
+    if (csp) {
+      encode_nohead(optmdbl, bl);
+    } else {
+      optmetadata_t empty;
+      encode(empty, bl);
+    }
     // encode inodestat
     ENCODE_FINISH(bl);
   }
