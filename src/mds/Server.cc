@@ -5516,7 +5516,7 @@ void Server::handle_client_readdir(const MDRequestRef& mdr)
     // inode
     dout(12) << "including inode in " << *in << " snap " << snapid << dendl;
     int r = in->encode_inodestat(dnbl, mdr->session, realm, snapid,
-				 bytes_left - (int)dnbl.length(), 0, new_caps);
+				 bytes_left - (int)dnbl.length(), 0, nullptr, new_caps);
     if (r < 0) {
       // chop off dn->name, lease
       dout(10) << " ran out of room, stopping at " << start_len << " < " << bytes_left << dendl;
