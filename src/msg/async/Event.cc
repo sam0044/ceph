@@ -185,12 +185,16 @@ EventCenter::~EventCenter()
 {
   {
     std::lock_guard<std::mutex> l(external_lock);
-    while (!external_events.empty()) {
-      EventCallbackRef e = external_events.front();
-      if (e)
+    // Index rather than iterate: the old deque loop re-read front()
+    // every pass and so tolerated a callback queueing another event,
+    // and there is no reason for the vector version to be less robust.
+    // (A callback that did that would in fact deadlock on external_lock
+    // long before the vector reallocated, but do not rely on it.)
+    for (size_t i = 0; i < external_events.size(); i++) {
+      if (EventCallbackRef e = external_events[i]; e)
         e->do_request(0);
-      external_events.pop_front();
     }
+    external_events.clear();
   }
   time_events.clear();
   //assert(time_events.empty());
@@ -418,7 +422,9 @@ int EventCenter::process_events(unsigned timeout_microseconds,  ceph::timespan *
   tv.tv_usec = timeout_microseconds % 1000000;
 
   ldout(cct, 30) << __func__ << " wait second " << tv.tv_sec << " usec " << tv.tv_usec << dendl;
-  std::vector<FiredFileEvent> fired_events;
+  // Drivers either resize() or push_back() into this, so it must start
+  // empty.  clear() keeps the capacity from the previous iteration.
+  fired_events.clear();
   numevents = driver->event_wait(fired_events, &tv);
   auto working_start = ceph::mono_clock::now();
   for (int event_id = 0; event_id < numevents; event_id++) {
@@ -452,17 +458,19 @@ int EventCenter::process_events(unsigned timeout_microseconds,  ceph::timespan *
 
   if (external_num_events.load()) {
     external_lock.lock();
-    std::deque<EventCallbackRef> cur_process;
-    cur_process.swap(external_events);
+    // external_events_process was cleared at the end of the last round,
+    // so external_events comes back empty but keeps its capacity.
+    external_events_process.swap(external_events);
     external_num_events.store(0);
     external_lock.unlock();
-    numevents += cur_process.size();
-    while (!cur_process.empty()) {
-      EventCallbackRef e = cur_process.front();
+    numevents += external_events_process.size();
+    // Callbacks may queue new external events; those land in
+    // external_events (under the lock) and are picked up next round.
+    for (auto e : external_events_process) {
       ldout(cct, 30) << __func__ << " do " << e << dendl;
       e->do_request(0);
-      cur_process.pop_front();
     }
+    external_events_process.clear();
   }
 
   if (!numevents && !blocking) {

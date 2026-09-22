@@ -44,6 +44,7 @@
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
+#include <vector>
 
 #include "common/ceph_time.h"
 #include "common/dout.h"
@@ -159,7 +160,14 @@ class EventCenter {
   pthread_t owner = 0;
   std::mutex external_lock;
   std::atomic_ulong external_num_events;
-  std::deque<EventCallbackRef> external_events;
+  std::vector<EventCallbackRef> external_events;
+  // Scratch buffers reused across process_events() calls so that a busy
+  // worker doesn't malloc/free once per event loop iteration.  Both are
+  // touched by the owning thread only; external_events is swapped into
+  // external_events_process under external_lock and the (now empty)
+  // buffers ping-pong, so neither reallocates once warmed up.
+  std::vector<EventCallbackRef> external_events_process;
+  std::vector<FiredFileEvent> fired_events;
   std::vector<FileEvent> file_events;
   EventDriver *driver;
   std::multimap<clock_type::time_point, TimeEvent> time_events;
