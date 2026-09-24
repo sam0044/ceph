@@ -113,9 +113,11 @@ class MDSCacheObject {
 
   // per-pin-type ref tracking, controlled by the mds_ref_set config
   // option (startup-only).  Read once per process; the first use happens
-  // early in rank lifetime, well after config is loaded.
+  // early in rank lifetime, well after config is loaded.  The config
+  // lookup is out of line so that what every get() and put() runs is only
+  // the guard check and a load, and inlines.
   static bool ref_set_enabled() {
-    static const bool enabled = g_conf().get_val<bool>("mds_ref_set");
+    static const bool enabled = read_ref_set_enabled();
     return enabled;
   }
 
@@ -332,6 +334,8 @@ class MDSCacheObject {
   };
   mempool::mds_co::compact_multimap<waiter_seq_t, struct waiter> waiting;
   static waiter_seq_t last_wait_seq;
+
+  static bool read_ref_set_enabled();
 };
 
 inline std::ostream& operator<<(std::ostream& out, const mdsco_db_line_prefix& o) {

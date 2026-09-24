@@ -23,6 +23,10 @@ std::string_view MDSCacheObject::generic_pin_name(int p) const {
   }
 }
 
+bool MDSCacheObject::read_ref_set_enabled() {
+  return g_conf().get_val<bool>("mds_ref_set");
+}
+
 void MDSCacheObject::finish_waiting(waitmask_t mask, int result) {
   MDSContext::vec finished;
   take_waiting(mask, finished);
