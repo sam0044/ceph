@@ -2177,6 +2177,16 @@ void Server::journal_and_reply(const MDRequestRef& mdr, CInode *in, CDentry *dn,
     mds->queue_one_replay();
   } else if (mdr->did_early_reply) {
     mds->locker->handle_locks_for_early_reply(mdr.get());
+    /*
+     * This request refilled the session's preallocated inode numbers.  The
+     * new ones cannot be handed out until this event is safe, and an early
+     * reply does not flush the log, so without a flush they may stay
+     * unusable until something else flushes it.  If the session runs out
+     * meanwhile, each create has to allocate from the inotable instead, and
+     * that rules out an early reply.
+     */
+    if (!mdr->prealloc_inos.empty())
+      mdlog->flush();
   } else if (g_conf().get_val<bool>("mds_group_commit_enable") &&
              !mds->is_daemon_stopping()) {
     if (group_commit_should_bypass()) {
