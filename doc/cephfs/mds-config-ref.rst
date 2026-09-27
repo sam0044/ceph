@@ -17,6 +17,7 @@
 .. confval:: mds_dirstat_min_interval
 .. confval:: mds_scatter_nudge_interval
 .. confval:: mds_client_prealloc_inos
+.. confval:: mds_defer_client_range_shrink
 .. confval:: mds_early_reply
 .. confval:: mds_group_commit_enable
 .. confval:: mds_group_commit_max_entries
