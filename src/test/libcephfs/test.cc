@@ -160,6 +160,60 @@ TEST(LibCephFS, OpenReadWrite) {
   ceph_shutdown(cmount);
 }
 
+static int set_mds_config(struct ceph_mount_info *cmount, const char *key,
+			  const char *value)
+{
+  std::string cmd = std::string("{\"prefix\": \"config set\", \"var\": \"") +
+    key + "\", \"val\": [\"" + value + "\"]}";
+  const char *cmdv[] = {cmd.c_str()};
+  char *outb = nullptr, *outs = nullptr;
+  size_t outb_len = 0, outs_len = 0;
+  int r = ceph_mds_command(cmount, "*", cmdv, 1, nullptr, 0,
+			   &outb, &outb_len, &outs, &outs_len);
+  if (outb)
+    ceph_buffer_free(outb);
+  if (outs)
+    ceph_buffer_free(outs);
+  return r;
+}
+
+/*
+ * With mds_allow_async_dirops off the MDS answers a create with the bare
+ * created inode number even to a client that has the DELEG_INO feature.
+ * The client must not try to decode that as an openc_response_t.
+ */
+TEST(LibCephFS, CreateWithAsyncDiropsDisabled) {
+  struct ceph_mount_info *cmount;
+  ASSERT_EQ(0, ceph_create(&cmount, NULL));
+  ASSERT_EQ(0, ceph_conf_read_file(cmount, NULL));
+  ASSERT_EQ(0, ceph_conf_parse_env(cmount, NULL));
+  ASSERT_EQ(0, ceph_mount(cmount, "/"));
+
+  ASSERT_EQ(0, set_mds_config(cmount, "mds_allow_async_dirops", "false"));
+  // turn it back on however the test ends, a broken client throws
+  struct Cleanup {
+    struct ceph_mount_info *cmount;
+    ~Cleanup() {
+      set_mds_config(cmount, "mds_allow_async_dirops", "true");
+      ceph_shutdown(cmount);
+    }
+  } cleanup{cmount};
+
+  char c_path[1024];
+  sprintf(c_path, "test_create_no_async_dirops_%d", getpid());
+  int fd = ceph_open(cmount, c_path, O_WRONLY|O_CREAT|O_EXCL, 0666);
+  EXPECT_LT(0, fd);
+  if (fd > 0)
+    EXPECT_EQ(0, ceph_close(cmount, fd));
+  EXPECT_EQ(-EEXIST, ceph_open(cmount, c_path, O_WRONLY|O_CREAT|O_EXCL, 0666));
+
+  struct ceph_statx stx;
+  EXPECT_EQ(0, ceph_statx(cmount, c_path, &stx, CEPH_STATX_SIZE, 0));
+  EXPECT_EQ(0u, stx.stx_size);
+
+  EXPECT_EQ(0, ceph_unlink(cmount, c_path));
+}
+
 TEST(LibCephFS, MountNonExist) {
 
   struct ceph_mount_info *cmount;

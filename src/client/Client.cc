@@ -2017,7 +2017,13 @@ int Client::verify_reply_trace(int r, MetaSession *session,
 
   extra_bl = reply->get_extra_bl();
   if (extra_bl.length() >= 8) {
-    if (session->mds_features.test(CEPHFS_FEATURE_DELEG_INO)) {
+    /*
+     * The MDS sends an openc_response_t only to a session that has the
+     * DELEG_INO feature and only while mds_allow_async_dirops is on, and
+     * the bare created ino otherwise.  Tell them apart by length: the bare
+     * ino is exactly 8 bytes, the versioned struct is always longer.
+     */
+    if (extra_bl.length() > sizeof(uint64_t)) {
      struct openc_response_t	ocres;
 
      decode(ocres, extra_bl);
