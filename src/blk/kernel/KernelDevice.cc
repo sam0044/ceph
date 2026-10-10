@@ -1198,14 +1198,21 @@ void KernelDevice::aio_submit(IOContext *ioc)
   // external-completion mode, where they have their own ring
   io_queue_t *wq = outer_io_queue ? outer_io_queue.get()
 				  : inner_io_queue.get();
+  // Once the last aio of this ioc is submitted it may complete, and
+  // the completion callback may free the ioc (e.g. together with its
+  // TransContext).  Take both ranges before submitting anything and
+  // do not touch ioc after a submit_batch() call.
+  list<aio_t>::iterator wb = ioc->writes.running.begin();
+  list<aio_t>::iterator rb = ioc->reads.running.begin();
+  const bool have_reads = rb != re;
   int r = 0, retries = 0;
-  if (ioc->writes.running.begin() != we) {
-    r = wq->submit_batch(ioc->writes.running.begin(), we,
+  if (wb != we) {
+    r = wq->submit_batch(wb, we,
 				     priv, &retries, retry_max,
 				     initial_delay_us);
   }
-  if (r >= 0 && ioc->reads.running.begin() != re) {
-    r = inner_io_queue->submit_batch(ioc->reads.running.begin(), re,
+  if (r >= 0 && have_reads) {
+    r = inner_io_queue->submit_batch(rb, re,
       priv, &retries, retry_max, initial_delay_us);
   }
 
